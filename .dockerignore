@@ -1,0 +1,7 @@
+data/
+weights/
+logs/
+.git/
+__pycache__/
+*.pth
+.env/

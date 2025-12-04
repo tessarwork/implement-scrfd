@@ -1,0 +1,11 @@
+
+weights/
+logs/
+.git/
+__pycache__/
+*.pth
+.env/
+insightface/
+WIDER_train/
+WIDER_val/
+*.zip

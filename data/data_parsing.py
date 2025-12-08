@@ -31,33 +31,32 @@ def parse_wider_face(txt_path, root_img_dir):
             parts = line.split()
             # Pastikan format label Anda benar. Biasanya index 1 itu pathnya.
             # Contoh: # 0--Parade/0_Parade... 
-            if len(parts) > 1:
-                rel_path = parts[1] 
-            else:
-                rel_path = parts[0].replace('#', '').strip() # Jaga-jaga format beda
-
+            rel_path = parts[1] if len(parts) > 1 else parts[0].replace('#', '').strip()
             current_path = os.path.join(root_img_dir, rel_path)
-            current_boxes = []
-            
+            current_anns = []
+
         else: 
             # --- BAGIAN KOORDINAT BOX ---
             coords = line.split()
-            box = [float(x) for x in coords[:4]]
-            kps = [float(y) for y in coords[4:]]
+            box = [float(x) for x in coords]
+            # kps = [float(y) for y in coords[4:]]
         
             # <<< PERBAIKAN DISINI >>>
             # Logika ini HARUS sejajar (indent) di dalam else
             # agar hanya dijalankan saat 'box' sudah terdefinisi.
+            if len(box) < 4: continue
+            if len(box) == 4: 
+                box.extend([-1.0] * 15)
             if box[2] > box[0] and box[3] > box[1]:
-                current_boxes.append(box)
+                current_anns.append(box)
 
     # Jangan lupa simpan gambar terakhir setelah loop selesai
     if current_path is not None: 
         image_paths.append(current_path)
-        if len(current_boxes) > 0: 
-            targets.append(numpy.array(current_boxes, dtype=numpy.float32))
+        if len(current_anns) > 0: 
+            targets.append(numpy.array(current_anns, dtype=numpy.float32))
         else: 
-            targets.append(numpy.zeros((0, 4), dtype=numpy.float32))
+            targets.append(numpy.zeros((0, 19), dtype=numpy.float32))
             
     print(f"Selesai parsing. Ditemukan {len(image_paths)} gambar.")
     return image_paths, targets
@@ -73,8 +72,8 @@ if __name__=="__main__":
         if len(paths) > 0:
             print("\nSampel Data Pertama:")
             print("Path:", paths[0]) # Print index 0 saja biar terminal ga penuh
-            print("Boxes (x1, y1, x2, y2):")
-            print(boxes[0])
+            # print("Boxes (x1, y1, x2, y2):")
+            # print(boxes[0])
         else:
             print("Data kosong! Cek isi file txt.")
 

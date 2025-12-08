@@ -15,10 +15,35 @@ try:
     from atss import ATSSAssigner
     from loss import SCRFDLoss
     from data.data_parsing import parse_wider_face
-    from data.data_processing import WiderFaceDataset
+    from data.data_processing_kps import WiderFaceDataset
 except ImportError as e: 
     print(f"CRITICAL ERROR: Modul tidak ditemukan. {e}")
     sys.exit(1)
+
+def get_current_lr(epoch, batch_idx, num_batches, args): 
+    """
+    Menghitung Learning Rate sesuai Paper SCRFD:
+    - Initial: 0.00001
+    - Warmup: Linear sampai Target LR (Epoch 0-3)
+    - Decay: /10 di epoch 440 dan 544
+    - Total Epoch: 640
+    """
+    target_lr = 0.01 * (args.batch_size / 32.0)
+    if epoch < 3: 
+        start_lr = 0.00001
+
+        total_warmup_iters = 3 * num_batches
+        current_iter = (epoch * num_batches) + batch_idx
+
+        lr = start_lr + (target_lr - start_lr) * (current_iter / total_warmup_iters)
+        return lr
+    lr = target_lr
+    if epoch >= 544: 
+        lr *= 0.01
+    elif epoch >= 440: 
+        lr *= 0.1
+    return lr
+
 
 def setup_logger(log_dir): 
     """
@@ -130,7 +155,7 @@ def main(args):
     logger.info("=== SCRFD TRAINING STARTED ===")
     logger.info(f"Log file saved to: {log_file}")
 
-    logger.info(f"Config: Batch={args.batch_size}, Epochs={args.epochs}, LR={args.lr}")
+    logger.info(f"Config: Batch={args.batch_size}, Epochs={args.epochs}")
     # logger.info(f"Data Root: {args.img_root}")
     timestamp_session = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     session_dir = f"weights/{timestamp_session}"
@@ -157,8 +182,8 @@ def main(args):
     model = SCRFD(variant='2.5GF').to(device)
     model.train()
 
-    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
-    scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[440, 544])
+    optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9, weight_decay=5e-4)
+    # scheduler = optim.lr_scheduler.MultiStepLR(optimizer, milestones=[440, 544])
 
     anchor_gen = SCRFDAnchorGenerator()
     assigner = ATSSAssigner(topk=9)
@@ -168,18 +193,24 @@ def main(args):
 
     start_epoch = 0
     best_val_loss = float('inf')
-    epoch_multi = 8
-    total_epochs = args.epochs * epoch_multi
+    # epoch_multi = 8
+    # total_epochs = args.epochs * epoch_multi
 
 
-    for epoch in range(total_epochs): 
+    for epoch in range(start_epoch, args.epochs): 
         epoch_loss = 0.0
         epoch_cls = 0.0
         epoch_reg = 0.0
+        num_batches = len(train_loader)
 
-        prog_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{total_epochs}")
+        prog_bar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{args.epochs}")
         for batch_idx, (imgs, targets) in enumerate(prog_bar): 
             try: 
+                if imgs is None: 
+                    continue
+                current_lr = get_current_lr(epoch, batch_idx, len(train_loader), args)
+                for param_group in optimizer.param_groups: 
+                    param_group['lr'] = current_lr
                 imgs = imgs.to(device)
 
                 cls_outs, reg_outs = model(imgs)
@@ -220,14 +251,14 @@ def main(args):
                 epoch_cls += batch_cls.item()
                 epoch_reg += batch_reg.item()
 
-                prog_bar.set_postfix(loss=f"{batch_loss.item():.4f}", lr=f"{optimizer.param_groups[0]['lr']:.5f}")
+                prog_bar.set_postfix(loss=f"{batch_loss.item():.4f}", lr=f"{current_lr:.6f}")
             except Exception as e: 
                 logger.error(f"error in batch {batch_idx}: {e}")
                 continue
-        avg_train_loss = epoch_loss / len(train_loader)
-        current_lr = optimizer.param_groups[0]['lr']
-        logger.info(f"Epoch {epoch+1} Train Loss: {avg_train_loss:.5f} (LR: {current_lr:.6f})")
-        scheduler.step()
+        avg_train_loss = epoch_loss / num_batches
+        # current_lr = optimizer.param_groups[0]['lr']
+        logger.info(f"Epoch {epoch+1} Done | Train Loss: {avg_train_loss:.5f} | Last LR: {current_lr:.6f}")
+        # scheduler.step()
 
         if (epoch + 1) % 2 == 0:
             val_loss, val_cls, val_reg = evaluate(model, val_loader, device, anchor_gen, assigner, criterion)
@@ -240,7 +271,7 @@ def main(args):
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                'scheduler_state_dict': scheduler.state_dict(),
+                # 'scheduler_state_dict': scheduler.state_dict(),
                 'loss': val_loss,
             }, save_path)
             logger.info(f"Checkpoint saved: {save_path}")
@@ -259,8 +290,8 @@ if __name__ == "__main__":
     parser.add_argument('--img_root_val', type=str, default='data/WIDER_val/images')
     parser.add_argument('--label_path_val', type=str, default='data/WIDER_val/labelv2.txt')
 
-    parser.add_argument('--batch_size', type=int, default=32, help='Batch size (Default 8 untuk GPU 8GB-an)')
-    parser.add_argument('--epochs', type=int, default=80, help='Total epochs (Paper: 640)')
+    parser.add_argument('--batch_size', type=int, default=8, help='Batch size (Default 8 untuk GPU 8GB-an)')
+    parser.add_argument('--epochs', type=int, default=10, help='Total epochs (Paper: 640)')
     parser.add_argument('--lr', type=float, default=0.01, help='Learning Rate (0.0025 untuk Batch 8)')
     parser.add_argument('--num_workers', type=int, default=4)
     # parser.add_argument('--resume', type=str, default=None, help='Path ke file .pth untuk resume training')
